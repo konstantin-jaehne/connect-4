@@ -1,0 +1,237 @@
+c4checkrepo = "!f() { \
+		p=$(git config c4.path); cd $p; \
+		if [ -d \".\\connect-4\" ]; \
+			then cd connect-4; \
+			else git clone \"https://github.com/konstantin-jaehne/connect-4.git\" >/dev/null 2>&1; cd connect-4; fi; \
+		git fetch --all >/dev/null 2>&1; \
+		if [[ $(git status --porcelain | wc -l) -gt 0 ]]; then git restore .; fi; \
+		git pull >/dev/null 2>&1; \
+	}; f"
+	c4domove = "!f() { \
+		p=\"$1\"; move=\"$2\"; board=(\"$3\" \"$4\"); shift; shift; shift; shift; heights=(\"$@\"); \
+		height="${heights[$move]}"; comp=$((7*$move+6)); \
+		if [[ $height -lt $comp ]]; then board[$p]=$((board[$p]^(1<<$height))); heights[$move]=$((height+1)); fi; \
+		echo ${board[@]} ${heights[@]}; \
+	}; f"
+	c4loadboard = "!f() { \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+		declare -a board; board[0]=0; board[1]=0; \
+		height=(0 7 14 21 28 35 42); lineNumber=0; \
+		while IFS=\"\" read -r p || [ -n \"$p\" ]; \
+			do if [[ $# == 2 && $2 == $(($lineNumber-4)) ]]; then break; fi; \
+			lineNumber=$((lineNumber+1)); player=$((1-($lineNumber%2))); \
+			if [[ lineNumber -gt 4 ]]; then move=$(echo $p | awk '{print $2}'); move=$(($move-1)); \
+				IFS=' ' read -r board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4domove $player $move ${board[0]} ${board[1]} ${height[@]}); \
+				board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); \
+			fi; \
+		done < \"$1\"; \
+		echo $(($lineNumber-4)) ${board[@]} ${height[@]}; \
+	}; f"
+	c4printboard = "!f() { \
+		path=\"$(git config c4.path)\\connect-4\"; cd $path; cd matches; \
+		game=\"$1\"; movecount=\"$2\"; shift; shift; board=(\"$@\"); \
+		FILE=\"${game}.txt\"; p1=$(sed '1q;d' $FILE); p2=$(sed '2q;d' $FILE); \
+		totalmovecount=$(($(wc -l < $FILE) - 4)); \
+		username=$(git config c4.username); gamestate=$(sed '3q;d' $FILE); parity=$(($movecount%2)); \
+		cond1=$(($p1 == $username && $parity == 0)); cond2=$(($p2 == $username && $parity == 1)); \
+		if [[ ($gamestate == 'O') && ($cond1 == 1 || $cond2 == 1) && ($movecount == $totalmovecount) ]]; then turnInfo=\", your turn\"; fi; \
+		echo \"#$game: $p1 vs $p2 (move $movecount/$totalmovecount$turnInfo)\"; echo \" 1234567\"; \
+		for i in {0..5}; \
+			do line=\"\"; \
+			for k in {0..6}; \
+				do index=$(($k*7+5-$i)); \
+				cond1=$(((board[0]>>$index)&1)); \
+				cond2=$(((board[1]>>$index)&1)); \
+				if [[ $cond1 == 1 ]]; then line=\"${line}X\"; \
+				elif [[ $cond2 == 1 ]]; then line=\"${line}O\"; \
+				else line=\"${line} \"; fi; done; \
+			echo \"|$line| \"; done; \
+		echo \" -------\"; \
+	}; f"
+	c4printchat = "!f() { \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; lineNumber=0; \
+		FILE=\"matches/$1.txt\"; username=$(git config c4.username); \
+		line1=$(sed '1q;d' $FILE); line2=$(sed '2q;d' $FILE); players=($line1 $line2); \
+		if [[ ($line1 != $username) && ($line2 != $username) ]]; \
+			then exit; fi; \
+		while IFS=\"\" read -r p || [ -n \"$p\" ]; \
+			do lineNumber=$((lineNumber+1)); \
+			if [[ lineNumber -gt 4 ]]; then time=$(echo $p | awk '{print $1}'); \
+				text=$(echo $p | awk '{for(i=3; i<=NF; ++i) printf \"%s \", $i; print \"\"}'); \
+				if [[ ! -z $text ]]; \
+					then player=${players[(($lineNumber%2))]}; \
+					printf '%(%c)T (%s):\n' $time $player; \
+					echo $text; fi; fi; \
+		done < $FILE; \
+		echo; \
+	}; f"
+	c4checkwin = "!f() { \
+		board=\"$1\"; context=\"$2\"; \
+		zwr=$(($board&$board>>$context)); \
+		result=$(($zwr&$zwr>>2*$context)); \
+		if [[ result -gt 0 ]]; then echo \"true\"; else echo \"false\"; fi; \
+	}; f"
+	c4h = "!f() { \
+		echo Available commands:; \
+		echo \"c4h (help): prints all c4 commands\"; \
+		echo \"c4i (install): clones and registers path for local copy of git repo\"; \
+		echo \"c4r (register): register/login with username\"; \
+		echo \"c4s (status): list your current games, rating, username and other info\"; \
+		echo \"c4n (new): start a new game\"; \
+		echo \"c4l (load): load game (via match ID), print current board state\"; \
+		echo \"c4m (move): make move\"; \
+		echo \"c4u (undo), c4f (forward): take back or skip forward\"; \
+		echo \"c4p (print); print leaderboard\"; \
+	}; f"
+	c4r = "!f() { \
+		if [[ \"$1\" == *\",\"* ]]; then echo Username must not contain any comma.; exit; \
+		else git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+			git config --global c4.username \"$1\"; \
+			regex=\"^${1},.*\"; FILE=\"leaderboard.txt\"; \
+			if ! grep -q \"$regex\" \"$FILE\"; \
+				then echo \"$1,1500\" >> $FILE; \
+				sort -k2,2nr -k1,1 -t',' -o $FILE $FILE; \
+				git add * >/dev/null 2>&1; \
+				git commit -m\"Added new user: $1\" >/dev/null 2>&1; \
+				git push >/dev/null 2>&1; \
+				echo Created new user: $1; \
+			else echo Logged in as: $1; \
+			fi; fi; \
+	}; f"
+	c4i = "!f() { \
+		git config --global c4.path \"$1\"; \
+		git c4checkrepo; \
+	}; f"
+	c4n = "!f() { \
+    	git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+    	count=$(head -n1 config.txt); newCount=$(($count+1)); \
+    	mkdir -p matches; name=matches/$(printf '%0*d' 6 \"$newCount\").txt; touch $name; \
+    	echo \"$newCount\" > config.txt; \
+    	if [[ $1 == '2' ]]; then echo \"$2\" >> \"$name\"; echo \"$(git config c4.username)\" >> \"$name\"; \
+    	elif [[ $1 == '1' ]]; then echo \"$(git config c4.username)\" >> \"$name\"; echo \"$2\" >> \"$name\"; fi; \
+    	echo O >> \"$name\"; echo $(date +%s) START >> \"$name\"; \
+    	git add * >/dev/null 2>&1; git commit -m\"Created new match: $(git config c4.username) vs $2$\" >/dev/null 2>&1; git push >/dev/null 2>&1; \
+    	}; f"
+	c4s = "!f() { \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+		username=$(git config c4.username); game=$(git config c4.game); \
+		rating=$(echo $(grep \"^$username,.*\" \"leaderboard.txt\") | cut -d',' -f2); \
+		echo $username "\\(Rating: $rating\\)"; cd matches; \
+		for FILE in *; \
+			do line1=$(sed '1q;d' $FILE); line2=$(sed '2q;d' $FILE); line3=$(sed '3q;d' $FILE); \
+			if [[ ($line1 == $username || $line2 == $username) && $line3 == 'O' ]]; \
+				then numberLines=$(wc -l < $FILE); parity=$(($numberLines%2)); \
+				if [[ $game == ${FILE%.*} ]]; then mark=\"*\"; else mark=\" \"; fi; \
+				if [[ $line1 == $username ]]; then opponent=\"$line2\"; elif [[ $line2 == $username ]]; then opponent=\"$line1\"; fi; \
+				if [[ ($parity == 0 && $line1 == $username) || ($parity == 1 && $line2 == $username) ]]; \
+				then echo \"$mark Game ${FILE%.*} (vs $opponent, your turn, move $(($numberLines-4)))\"; fi; fi; done; \
+		for FILE in *; \
+			do line1=$(sed '1q;d' $FILE); line2=$(sed '2q;d' $FILE); line3=$(sed '3q;d' $FILE); \
+			if [[ ($line1 == $username || $line2 == $username) && $line3 == 'O' ]]; \
+				then numberLines=$(wc -l < $FILE); parity=$(($numberLines%2)); \
+				if [[ $game == ${FILE%.*} ]]; then mark=\"*\"; else mark=\" \"; fi; \
+				if [[ $line1 == $username ]]; then opponent=\"$line2\"; elif [[ $line2 == $username ]]; then opponent=\"$line1\"; fi; \
+				if [[ ($parity == 1 && $line1 == $username) || ($parity == 0 && $line2 == $username) ]]; \
+				then echo \"$mark Game ${FILE%.*} (vs $opponent)\"; fi; fi; done; \
+	}; f"
+	c4l = "!f() { \
+		if [[ $# == 0 ]]; \
+		then game=$(git config c4.game); move=$(git config c4.move); \
+			IFS=' ' read -r movecount board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4loadboard \"matches/$game.txt\" $move); \
+			board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); \
+			git c4printchat $game; \
+			git c4printboard $game $move ${board[@]}; \
+		else IFS=' ' read -r movecount board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4loadboard \"matches/$1.txt\"); \
+			board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); \
+			git config --global c4.game \"$1\"; git config --global c4.move $movecount; \
+			git c4printchat $1; \
+			git c4printboard $1 $movecount ${board[@]}; fi; \
+	}; f"
+	c4m = "!f() { \
+		if [[ $# == 0 ]]; then echo \"Too few arguments. c4m requires a column to play in, e.g. git c4m 3\"; exit; fi; \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+		game=$(git config c4.game); move=$(git config c4.move); username=$(git config c4.username); \
+		IFS=' ' read -r movecount board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4loadboard \"matches/$game.txt\" $move); \
+		board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); \
+		cd matches; FILE=\"$game.txt\"; parity=$(($movecount%2)); \
+		line1=$(sed '1q;d' $FILE); line2=$(sed '2q;d' $FILE); line3=$(sed '3q;d' $FILE); \
+		if [[ ($line1 != $username) && ($line2 != $username) ]]; \
+			then echo \"You are not participating in game $game. Please load a different game.\"; exit; fi; \
+		if [[ $line3 != 'O' ]]; \
+			then echo \"Game $game is already finished. Please load a different game.\"; exit; fi; \
+		if [[ $movecount != $move ]]; \
+			then echo \"You're looking at game $game in history mode. Please load game again or move forward to the most recent move.\"; exit; fi; \
+		if [[ ($parity == 1 && $line1 == $username) || ($parity == 0 && $line2 == $username) ]]; \
+			then echo It is not your turn in game $game.; exit; fi; \
+		if [[ ($1 -lt 1) || ($1 -gt 7) ]]; \
+			then echo \"There are only 7 columns. Please pick a number between 1 and 7.\"; exit; fi; \
+		internalMove=$(($1-1)); threshold=$((7*$internalMove+6)); player=$(($movecount%2)); \
+		if [[ ${height[$internalMove]} -ge $threshold ]]; \
+			then echo \"This column is already full.\"; exit; fi; \
+		IFS=' ' read -r board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4domove $player $internalMove ${board[0]} ${board[1]} ${height[@]}); \
+		board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); doneMove=\"$1\"; shift; \
+		echo $(date +%s) $doneMove \"$@\" >> \"$FILE\"; moveForward=$((move+1)); git config --global c4.move $moveForward; \
+		c1=$(git c4checkwin ${board[$player]} 1); \
+		c6=$(git c4checkwin ${board[$player]} 6); \
+		c7=$(git c4checkwin ${board[$player]} 7); \
+		c8=$(git c4checkwin ${board[$player]} 8); \
+		if [[ ($c1 == 'true' || $c6 == 'true' || $c7 == 'true' || $c8 == 'true') ]]; \
+			then LB=\"leaderboard.txt\"; cd ..; \
+			rating1=$(echo $(grep \"^$line1,.*\" \"$LB\") | cut -d',' -f2); \
+			rating2=$(echo $(grep \"^$line2,.*\" \"$LB\") | cut -d',' -f2); \
+			if [[ $player == 0 ]]; \
+			then cd matches; sed -i '3s/.*/W/' \"$FILE\"; \
+				diff=$(awk \"BEGIN {print int(0.5+20*(1-1/(1+10**(($rating1-$rating2)/400))))}\"); \
+				newRating1=$(($rating1+$diff)); newRating2=$(($rating2-$diff)); \
+			else cd matches; sed -i '3s/.*/L/' \"$FILE\"; \
+				diff=$(awk \"BEGIN {print int(0.5+20*(1-1/(1+10**(($rating2-$rating1)/400))))}\"); \
+				newRating1=$(($rating1-$diff)); newRating2=$(($rating2+$diff)); fi; \
+			cd ..; \
+			grep -v \"^$line1,.*\" \"$LB\" > \"tmp\"; mv tmp \"$LB\"; \
+			grep -v \"^$line2,.*\" \"$LB\" > \"tmp\"; mv tmp \"$LB\"; \
+			echo \"$line1,$newRating1\" >> $LB; \
+			echo \"$line2,$newRating2\" >> $LB; \
+			sort -k2,2nr -k1,1 -t',' -o $LB $LB; fi; \
+		countPieces=$((h1+h2+h3+h4+h5+h6+h7)); \
+		if [[ $countPieces -gt 189 ]]; \
+			then sed -i '3s/.*/D/' $FILE; \
+			LB=\"leaderboard.txt\"; cd ..; \
+			rating1=$(echo $(grep \"^$line1,.*\" \"$LB\") | cut -d',' -f2); \
+			rating2=$(echo $(grep \"^$line2,.*\" \"$LB\") | cut -d',' -f2); \
+			diff1=$(awk \"BEGIN {print int(0.5+20*(0.5-1/(1+10**(($rating1-$rating2)/400))))}\"); \
+			diff2=$(awk \"BEGIN {print int(0.5+20*(0.5-1/(1+10**(($rating2-$rating1)/400))))}\"); \
+			diff=$(($diff1<=$diff2 ? $diff2 : $diff1)); \
+			if [[ $rating1 -ge $rating2 ]]; \
+				then newRating1=$(($rating1-$diff)); newRating2=$(($rating2+$diff)); \
+				else newRating1=$(($rating1+$diff)); newRating2=$(($rating2-$diff)); fi; \
+			grep -v \"^$line1,.*\" \"$LB\" > \"tmp\"; mv tmp \"$LB\"; \
+			grep -v \"^$line2,.*\" \"$LB\" > \"tmp\"; mv tmp \"$LB\"; \
+			echo \"$line1,$newRating1\" >> $LB; \
+			echo \"$line2,$newRating2\" >> $LB; \
+			sort -k2,2nr -k1,1 -t',' -o $LB $LB; fi; \
+		git c4printboard $game $moveForward ${board[@]}; \
+		git add * >/dev/null 2>&1; git commit -m\"Done move in game $game\" >/dev/null 2>&1; git push >/dev/null 2>&1; \
+		}; f"
+	c4u = "!f() { \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+		game=$(git config c4.game); move=$(git config c4.move); \
+		if [[ $move -gt 0 ]]; then move=$(($move-1)); git config --global c4.move $move; fi; \
+		IFS=' ' read -r movecount board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4loadboard \"matches/$game.txt\" $move); \
+		board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); \
+		git c4printboard $game $move ${board[@]}; \
+	}; f"
+	c4f = "!f() { \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+		game=$(git config c4.game); move=$(git config c4.move); \
+		path=\"$(git config c4.path)\\connect-4\"; cd $path; cd matches; FILE=\"${game}.txt\"; totalmovecount=$(($(wc -l < $FILE) - 4)); \
+		if [[ $move -lt $totalmovecount ]]; then move=$(($move+1)); git config --global c4.move $move; fi; \
+		IFS=' ' read -r movecount board1 board2 h1 h2 h3 h4 h5 h6 h7 <<<$(git c4loadboard \"matches/$game.txt\" $move); \
+		board=($board1 $board2); height=($h1 $h2 $h3 $h4 $h5 $h6 $h7); \
+		git c4printboard $game $move ${board[@]}; \
+	}; f"
+	c4p = "!f() { \
+		git c4checkrepo; p=\"$(git config c4.path)\\connect-4\"; cd $p; \
+		FILE=\"leaderboard.txt\"; \
+		echo LEADERBOARD; \
+		cat $FILE | sed 's/,/ /g' | sed '/^$/d' | sed '=' | sed 'N;s/\\n/ /' | column -s' ' -o' ' -t; \
+	}; f"
