@@ -1,2 +1,2 @@
-Konsti,1500
-Mo,1500
+Konsti,1510
+Mo,1490
